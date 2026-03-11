@@ -1,21 +1,43 @@
 const express = require("express");
-const router = express.Router();
 const axios = require("axios");
+const mongoose = require("mongoose");
+
 const Message = require("../models/Message");
 
-// ✅ GET all messages (saved in MongoDB)
+const router = express.Router();
+
+function ensureMongoConnection(res) {
+  if (mongoose.connection.readyState === 1) {
+    return true;
+  }
+
+  res.status(503).json({
+    success: false,
+    error:
+      "MongoDB is not connected. Update server/.env with a valid MONGO_URI before testing messages.",
+  });
+  return false;
+}
+
 router.get("/", async (req, res) => {
+  if (!ensureMongoConnection(res)) {
+    return;
+  }
+
   try {
-    const messages = await Message.find().sort({ createdAt: 1 }); // oldest first
+    const messages = await Message.find().sort({ createdAt: 1 });
     res.json(messages);
   } catch (error) {
-    console.log(error);
+    console.error(error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// ✅ POST message (save to MongoDB + send to Telegram)
 router.post("/", async (req, res) => {
+  if (!ensureMongoConnection(res)) {
+    return;
+  }
+
   try {
     const { name, email, message } = req.body;
 
@@ -26,21 +48,38 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Save to MongoDB
     const newMessage = await Message.create({ name, email, message });
 
-    // Send to Telegram
-    await axios.post(
-      `https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`,
-      {
-        chat_id: process.env.CHAT_ID,
-        text: `📩 New Message\n\nName: ${name}\nEmail: ${email}\nMessage: ${message}`,
-      }
-    );
+    if (!process.env.BOT_TOKEN || !process.env.CHAT_ID) {
+      return res.status(201).json({
+        success: true,
+        data: newMessage,
+        telegramDelivered: false,
+        warning: "Message saved, but Telegram is not configured.",
+      });
+    }
 
-    res.json({ success: true, data: newMessage });
+    try {
+      await axios.post(
+        `https://api.telegram.org/bot${process.env.BOT_TOKEN}/sendMessage`,
+        {
+          chat_id: process.env.CHAT_ID,
+          text: `New Message\n\nName: ${name}\nEmail: ${email}\nMessage: ${message}`,
+        }
+      );
+    } catch (telegramError) {
+      return res.status(502).json({
+        success: false,
+        data: newMessage,
+        telegramDelivered: false,
+        error: "Message saved, but Telegram delivery failed.",
+        details: telegramError.response?.data?.description || telegramError.message,
+      });
+    }
+
+    res.status(201).json({ success: true, data: newMessage, telegramDelivered: true });
   } catch (error) {
-    console.log(error);
+    console.error(error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
