@@ -18,6 +18,34 @@ const allowedOrigins = (CORS_ORIGIN || "")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+let mongoConnectionPromise;
+
+function connectToMongo() {
+  if (!hasUsableMongoUri) {
+    console.warn(
+      "MongoDB connection skipped: set a real MONGO_URI in server/.env before testing persistence."
+    );
+    return Promise.resolve();
+  }
+
+  if (mongoose.connection.readyState === 1) {
+    return Promise.resolve();
+  }
+
+  if (!mongoConnectionPromise) {
+    mongoConnectionPromise = mongoose
+      .connect(MONGO_URI)
+      .then(() => console.log("MongoDB connected successfully"))
+      .catch((err) => {
+        mongoConnectionPromise = null;
+        console.error("MongoDB connection error:", err.message);
+        throw err;
+      });
+  }
+
+  return mongoConnectionPromise;
+}
+
 app.use(
   cors({
     origin(origin, callback) {
@@ -32,16 +60,14 @@ app.use(
 );
 app.use(express.json());
 
-if (hasUsableMongoUri) {
-  mongoose
-    .connect(MONGO_URI)
-    .then(() => console.log("MongoDB connected successfully"))
-    .catch((err) => console.error("MongoDB connection error:", err.message));
-} else {
-  console.warn(
-    "MongoDB connection skipped: set a real MONGO_URI in server/.env before testing persistence."
-  );
-}
+app.use(async (req, res, next) => {
+  try {
+    await connectToMongo();
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.use("/api/messages", messageRoutes);
 
@@ -58,6 +84,20 @@ app.get("/", (req, res) => {
   res.send("Server running...");
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.use((error, req, res, next) => {
+  console.error(error);
+  res.status(500).json({
+    success: false,
+    error: error.message || "Server error",
+  });
 });
+
+if (!process.env.VERCEL) {
+  connectToMongo().finally(() => {
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  });
+}
+
+module.exports = app;
