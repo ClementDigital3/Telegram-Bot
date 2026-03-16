@@ -6,14 +6,30 @@ require("dotenv").config();
 const messageRoutes = require("./routes/messageRoutes");
 
 const app = express();
-const { MONGO_URI, PORT = 5000 } = process.env;
+const { MONGO_URI, PORT = 5000, CORS_ORIGIN } = process.env;
 
 const hasUsableMongoUri =
   typeof MONGO_URI === "string" &&
   MONGO_URI.trim() !== "" &&
   !MONGO_URI.includes("YOURCLUSTER");
 
-app.use(cors());
+const allowedOrigins = (CORS_ORIGIN || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error(`Origin ${origin} is not allowed by CORS.`));
+    },
+  })
+);
 app.use(express.json());
 
 if (hasUsableMongoUri) {
